@@ -82,13 +82,14 @@ def verify_login(http: HttpClient) -> dict[str, Any]:
 
 
 def _login_with_cookies(settings: Settings, http: HttpClient) -> AuthResult:
-    """Cookie 方式：解析 → 请求 current.json 验证。"""
+    """Cookie 方式：解析 → 注入客户端 → 请求 current.json 验证。"""
     raw = settings.linuxdo_cookies or ""
     logger.info("尝试 Cookie 登录（{}）", mask_cookie(raw))
     cookies = parse_cookies(raw)
     if not cookies:
         raise AuthError("Cookie 字符串解析结果为空")
-    # 携带 Cookie 请求验证；验证通过则当前 http 的 cookie jar 即为有效会话
+    # 关键：把 Cookie 挂到客户端 cookie jar 上再验证（否则验证请求不带凭据）
+    http.set_cookies(cookies)
     user = verify_login(http)
     return AuthResult(
         method="cookie", username=user.get("username"), cookies=http_cookies(http)

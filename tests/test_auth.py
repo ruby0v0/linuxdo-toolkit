@@ -40,6 +40,10 @@ class FakeClient:
         self._script = list(script)
         self.requests: list[str] = []
         self._session = None  # 显式无 jar，http_cookies 容错返回空 dict
+        self.injected_cookies: dict[str, str] = {}  # 记录 set_cookies 注入
+
+    def set_cookies(self, cookies: dict[str, str]) -> None:
+        self.injected_cookies.update(cookies)
 
     def _next(self, url: str) -> Any:
         if not self._script:
@@ -62,7 +66,9 @@ class FakeClient:
 
 
 def _cookie_settings(**extra: str) -> Settings:
-    return Settings(**{"LINUXDO_COOKIES": "_t=abc; theme_ids=1; badfragment", **extra})  # type: ignore[arg-type]
+    return Settings(  # type: ignore[arg-type]
+        **{"LINUXDO_COOKIES": "_t=abc; theme_ids=1; badfragment", **extra, "_env_file": None}
+    )
 
 
 # ---------- parse_cookies ----------
@@ -92,6 +98,14 @@ def test_login_via_cookies_success() -> None:
     assert result.username == "u1"
 
 
+def test_cookies_injected_before_verify() -> None:
+    """回归：Cookie 必须在验证请求前注入客户端（否则裸请求 404）。"""
+    http = FakeClient([("", FakeResponse(200, {"current_user": {"id": 1, "username": "u1"}}))])
+    login(_cookie_settings(), http)  # type: ignore[arg-type]
+    assert http.injected_cookies.get("_t") == "abc"
+    assert http.injected_cookies.get("theme_ids") == "1"
+
+
 def test_cookie_failure_falls_back_to_password() -> None:
     """边界条件 1：Cookie 验证失败 → 降级账号密码。Cookie 链重试 3 次需 3 个 403 响应。"""
     http = FakeClient([
@@ -106,6 +120,7 @@ def test_cookie_failure_falls_back_to_password() -> None:
         LINUXDO_COOKIES="_t=stale",
         LINUXDO_USERNAME="user",
         LINUXDO_PASSWORD="pass",
+        _env_file=None,
     )  # type: ignore[arg-type]
     result = login(settings, http)  # type: ignore[arg-type]
     assert result.method == "password"
@@ -126,7 +141,7 @@ def test_password_login_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         ("/session", FakeResponse(200, {"user": {"username": "u1"}})),
         ("current.json", FakeResponse(200, {"current_user": {"id": 7, "username": "u1"}})),
     ])
-    settings = Settings(LINUXDO_USERNAME="u1", LINUXDO_PASSWORD="pw")  # type: ignore[arg-type]
+    settings = Settings(LINUXDO_USERNAME="u1", LINUXDO_PASSWORD="pw", _env_file=None)  # type: ignore[arg-type]
     result = login(settings, http)  # type: ignore[arg-type]
     assert result.method == "password"
     assert result.username == "u1"
@@ -144,7 +159,7 @@ def test_password_login_bad_credentials_no_retry(monkeypatch: pytest.MonkeyPatch
             return super()._next(url)  # type: ignore[return-value]
 
     http = CountingClient([("session/csrf", FakeResponse(200, {"csrf": "tok"}))])
-    settings = Settings(LINUXDO_USERNAME="u1", LINUXDO_PASSWORD="wrong")  # type: ignore[arg-type]
+    settings = Settings(LINUXDO_USERNAME="u1", LINUXDO_PASSWORD="wrong", _env_file=None)  # type: ignore[arg-type]
     with pytest.raises(AuthError, match="403"):
         login(settings, http)  # type: ignore[arg-type]
     assert calls["session"] == 1

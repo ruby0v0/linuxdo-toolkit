@@ -66,7 +66,7 @@ class FakePage:
 
 
 def _settings(**extra: str) -> Settings:
-    return Settings(**{"LINUXDO_COOKIES": "_t=x", **extra})  # type: ignore[arg-type]
+    return Settings(**{"LINUXDO_COOKIES": "_t=x", **extra, "_env_file": None})  # type: ignore[arg-type]
 
 
 def test_fetch_topic_urls_shuffles_and_limits() -> None:

@@ -16,6 +16,7 @@ def _settings(**extra: str) -> Settings:
         "NOTIFY_TELEGRAM_CHAT_ID": "123",
     }
     base.update(extra)
+    base["_env_file"] = None  # 屏蔽本地 .env，防环境泄漏
     return Settings(**base)  # type: ignore[arg-type]
 
 

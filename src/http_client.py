@@ -26,6 +26,8 @@ class HttpClient(Protocol):
 
     def post(self, url: str, **kwargs: Any) -> HttpResponse: ...
 
+    def set_cookies(self, cookies: dict[str, str]) -> None: ...
+
     def close(self) -> None: ...
 
 
@@ -44,6 +46,9 @@ class CurlCffiClient:
 
     def post(self, url: str, **kwargs: Any) -> HttpResponse:
         return self._session.post(url, timeout=30, **kwargs)  # type: ignore[return-value]
+
+    def set_cookies(self, cookies: dict[str, str]) -> None:
+        self._session.cookies.update(cookies)
 
     def close(self) -> None:
         self._session.close()
@@ -67,6 +72,9 @@ class HttpxClient:
 
     def post(self, url: str, **kwargs: Any) -> HttpResponse:
         return self._client.post(url, **kwargs)  # type: ignore[return-value]
+
+    def set_cookies(self, cookies: dict[str, str]) -> None:
+        self._client.cookies.update(cookies)
 
     def close(self) -> None:
         self._client.close()
