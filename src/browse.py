@@ -65,8 +65,12 @@ def fetch_topic_urls(page: Page, count: int) -> list[tuple[str, str]]:
             "document.querySelectorAll('#topic-list tr.topic-list-item').length > 0",
             timeout=20_000,
         )
-    except Exception:  # noqa: BLE001 — 超时视为列表为空，由调用方处理
-        pass
+    except Exception:  # noqa: BLE001 — 超时/上下文销毁视为列表为空
+        logger.warning(
+            "等待帖子列表超时或页面异常：当前 URL={}，标题={}",
+            page.url, page.title(),
+        )
+        _dump_debug(page, prefix="empty-topic-list")
     elements = page.query_selector_all(SELECTOR_TOPIC_LIST)
     topics: list[tuple[str, str]] = []
     for el in elements:
@@ -77,6 +81,23 @@ def fetch_topic_urls(page: Page, count: int) -> list[tuple[str, str]]:
             topics.append((f"{BASE_URL}{href}" if href.startswith("/") else href, title or href))
     random.shuffle(topics)
     return topics[:count]
+
+
+def _dump_debug(page: Page, prefix: str) -> None:
+    """保存诊断产物（截图 + HTML 片段），用于排查页面实际状态。"""
+    try:
+        screenshot = f"/tmp/{prefix}.png"
+        html_path = f"/tmp/{prefix}.html"
+        page.screenshot(path=screenshot)
+        html = page.content()
+        with open(html_path, "w") as f:
+            f.write(html)
+        logger.warning("诊断产物：截图 {}，HTML {}（{} 字节）", screenshot, html_path, len(html))
+        # 页面正文前 200 字符（判断是否 CF 挑战页）
+        body_text = page.evaluate("() => document.body ? document.body.innerText : ''")[:200]
+        logger.warning("页面正文预览：{}", body_text.replace("\n", " ")[:200])
+    except Exception as exc:  # noqa: BLE001 — 诊断失败不影响主流程
+        logger.warning("保存诊断产物失败：{}", exc)
 
 
 def _maybe_like(page: Page, stats: BrowseStats) -> None:

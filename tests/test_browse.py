@@ -41,11 +41,19 @@ class FakePage:
         self.fail_urls = fail_urls or set()
         self.visited: list[str] = []
         self.wheel_calls = 0
+        self.url = "https://linux.do/latest"
+        self._title = "LINUX DO"
+
+    def title(self) -> str:
+        return self._title
 
     def goto(self, url: str, **kwargs: Any) -> None:
         if any(f in url for f in self.fail_urls):
             raise RuntimeError(f"navigation failed: {url}")
         self.visited.append(url)
+
+    def wait_for_function(self, expression: str, **kwargs: Any) -> None:
+        pass  # 桩直接视为条件满足
 
     def wait_for_selector(self, selector: str, **kwargs: Any) -> None:
         pass
