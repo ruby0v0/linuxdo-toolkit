@@ -99,12 +99,16 @@ def _login_with_cookies(settings: Settings, http: HttpClient) -> AuthResult:
 def http_cookies(http: HttpClient) -> dict[str, str]:
     """从客户端 cookie jar 提取全部 Cookie（注入浏览器用）。
 
+    curl-cffi 与 httpx 的 cookie jar 均为 Mapping 形式（name → value）；
     客户端未暴露 jar（如测试桩）时返回空 dict。
     """
     jar = getattr(http, "_session", None) or getattr(http, "_client", None)
     if jar is None:
         return {}
-    return {c.name: c.value for c in jar.cookies if c.value is not None}  # type: ignore[union-attr]
+    try:
+        return dict(jar.cookies)
+    except (TypeError, ValueError):
+        return {}
 
 
 def _login_with_password(settings: Settings, http: HttpClient) -> AuthResult:
