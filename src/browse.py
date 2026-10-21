@@ -54,14 +54,17 @@ def _dwell(page: Page) -> None:
 def fetch_topic_urls(page: Page, count: int) -> list[tuple[str, str]]:
     """从 latest 列表收集帖子 (url, title)，随机打散。
 
-    Discourse 的 latest 页是 SPA，依赖 JS 渲染内容。
-    采用 Playwright 网络 idle 检测（`wait_for_load_state("networkidle")`），
-    确保列表完全加载后再查找元素。
+    Discourse 是 SPA，页面 load 后内容由 JS 渲染。
+    用 JS 轮询等待列表元素出现（避免 networkidle 永不触发的问题）。
     """
-    page.goto(f"{BASE_URL}/latest", wait_until="networkidle", timeout=45_000)
-    # networkidle 触发后内容可能还有延迟，再等一次列表选择器
+    page.goto(f"{BASE_URL}/latest", wait_until="load", timeout=60_000)
+
+    # 轮询等待列表元素出现（最多 20s，每 0.5s 检查一次）
     try:
-        page.wait_for_selector(SELECTOR_TOPIC_LIST, timeout=15_000)
+        page.wait_for_function(
+            "document.querySelectorAll('#topic-list tr.topic-list-item').length > 0",
+            timeout=20_000,
+        )
     except Exception:  # noqa: BLE001 — 超时视为列表为空，由调用方处理
         pass
     elements = page.query_selector_all(SELECTOR_TOPIC_LIST)
