@@ -1,0 +1,56 @@
+name: Daily Visit
+
+on:
+  schedule:
+    # 每天 UTC 1:23（北京时间 9:23），避开整点（spec 边界条件 4）
+    - cron: "23 1 * * *"
+  workflow_dispatch: # 支持手动触发
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-visit
+  cancel-in-progress: false
+
+jobs:
+  daily-visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Install Playwright Chromium
+        run: uv run playwright install chromium --with-deps
+
+      # push / 手动触发时跑质量检查；schedule 跳过以加速（每次运行都跑会拖慢定时任务）
+      - name: Lint & Test
+        if: github.event_name != 'schedule'
+        run: |
+          uv run ruff check .
+          uv run pytest -q
+
+      - name: Run daily visit
+        env:
+          LINUXDO_COOKIES: ${{ secrets.LINUXDO_COOKIES }}
+          LINUXDO_USERNAME: ${{ secrets.LINUXDO_USERNAME }}
+          LINUXDO_PASSWORD: ${{ secrets.LINUXDO_PASSWORD }}
+          BROWSE_ENABLED: ${{ vars.BROWSE_ENABLED || 'true' }}
+          BROWSE_COUNT: ${{ vars.BROWSE_COUNT || '6' }}
+          LIKE_ENABLED: ${{ vars.LIKE_ENABLED || 'false' }}
+          HEADLESS: "true"
+          NOTIFY_ENABLED: ${{ vars.NOTIFY_ENABLED || 'false' }}
+          NOTIFY_CHANNEL: ${{ vars.NOTIFY_CHANNEL || 'telegram' }}
+          NOTIFY_TELEGRAM_BOT_TOKEN: ${{ secrets.NOTIFY_TELEGRAM_BOT_TOKEN }}
+          NOTIFY_TELEGRAM_CHAT_ID: ${{ secrets.NOTIFY_TELEGRAM_CHAT_ID }}
+          LOG_LEVEL: INFO
+        run: uv run python -m src.main
