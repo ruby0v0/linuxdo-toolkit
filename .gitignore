@@ -1,0 +1,29 @@
+# 本地敏感配置（凭据明文，禁止提交）
+.env
+.env.local
+.env*.local
+
+# 规划文档（本地留存，不入库）
+specs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# uv
+.uv/
+
+# Playwright
+playwright-report/
+test-results/
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
