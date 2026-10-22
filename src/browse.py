@@ -15,7 +15,7 @@ from src.retry import with_retry
 BASE_URL = "https://linux.do"
 
 # --- 页面选择器（集中常量，应对站点改版只需改这里） ---
-SELECTOR_TOPIC_LIST = "#topic-list tr.topic-list-item"
+SELECTOR_TOPIC_LIST = "table.topic-list tr.topic-list-item"
 SELECTOR_TOPIC_LINK = "a.title.raw-link.raw-topic-link"
 SELECTOR_TOPIC_BODY = "#post_1, .topic-post"
 
@@ -62,7 +62,7 @@ def fetch_topic_urls(page: Page, count: int) -> list[tuple[str, str]]:
     # 轮询等待列表元素出现（最多 20s，每 0.5s 检查一次）
     try:
         page.wait_for_function(
-            "document.querySelectorAll('#topic-list tr.topic-list-item').length > 0",
+            "document.querySelectorAll('table.topic-list tr.topic-list-item').length > 0",
             timeout=20_000,
         )
     except Exception:  # noqa: BLE001 — 超时/上下文销毁视为列表为空
