@@ -38,6 +38,7 @@ class CurlCffiClient:
         from curl_cffi import requests as curl_requests
 
         self._session = curl_requests.Session(impersonate="chrome")
+        self._session.headers.update(_DEFAULT_HEADERS)
         if cookies:
             self._session.cookies.update(cookies)
 
@@ -63,7 +64,7 @@ class HttpxClient:
         self._client = httpx.Client(
             timeout=30,
             cookies=cookies,
-            headers={"User-Agent": _FALLBACK_UA},
+            headers=dict(_DEFAULT_HEADERS),
             follow_redirects=True,
         )
 
@@ -85,6 +86,16 @@ _FALLBACK_UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
+
+
+# 与参考实现（doveppp/linuxdo-checkin）对齐的浏览器风格请求头，降低 Cloudflare / IP 风控误判概率
+_DEFAULT_HEADERS = {
+    "User-Agent": _FALLBACK_UA,
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": "https://linux.do/",
+}
 
 def create_client(cookies: dict[str, str] | None = None) -> HttpClient:
     """工厂：优先 curl-cffi，初始化失败降级 httpx 并记录原因。"""

@@ -90,9 +90,22 @@ def _login_with_cookies(settings: Settings, http: HttpClient) -> AuthResult:
         raise AuthError("Cookie 字符串解析结果为空")
     # 关键：把 Cookie 挂到客户端 cookie jar 上再验证（否则验证请求不带凭据）
     http.set_cookies(cookies)
-    user = verify_login(http)
+    try:
+        user = verify_login(http)
+    except AuthError as exc:
+        # GitHub Actions 等数据中心 IP 可能被 linux.do 限流（HTTP 429）。
+        # 429 是限流而非认证失败：Cookie 仍可能有效，跳过验证并信任 Cookie，
+        # 由后续浏览器访问最终确认，避免把限流误判为 Cookie 失效。
+        if "429" in str(exc):
+            logger.warning("Cookie 登录验证遇到 429 限流，跳过验证并信任 Cookie：{}", exc)
+            return AuthResult(
+                method="cookie",
+                username=None,
+                cookies=http_cookies(http) or cookies,
+            )
+        raise
     return AuthResult(
-        method="cookie", username=user.get("username"), cookies=http_cookies(http)
+        method="cookie", username=user.get("username"), cookies=http_cookies(http) or cookies
     )
 
 
@@ -161,8 +174,18 @@ def _login_with_password(settings: Settings, http: HttpClient) -> AuthResult:
     )
     logger.info("账号密码登录成功：用户 {}", data.get("user", {}).get("username"))
 
-    user = verify_login(http)
-    return AuthResult(method="password", username=user.get("username"), cookies=http_cookies(http))
+    try:
+        user = verify_login(http)
+        username = user.get("username")
+    except AuthError as exc:
+        if "429" in str(exc):
+            logger.warning("账号密码登录验证遇到 429 限流，跳过验证并信任登录结果：{}", exc)
+            username = data.get("user", {}).get("username")
+        else:
+            raise
+    return AuthResult(
+        method="password", username=username, cookies=http_cookies(http)
+    )
 
 
 def login(settings: Settings, http: HttpClient) -> AuthResult:
