@@ -41,6 +41,17 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      # DrissionPage 接管真实 Chrome，需要系统库 + 虚拟显示器兜底（CI 无物理屏幕）。
+      # ubuntu-latest 现为 24.04，使用 libasound2t64；下方已覆盖常见 Chrome 运行时依赖。
+      - name: Install system deps (xvfb, fonts, chrome runtime libs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+            libgbm1 libasound2t64 libxkbcommon0 libxcomposite1 libxdamage1 \
+            libxfixes3 libxrandr2 libpango-1.0-0 libcairo2 libatspi2.0-0 \
+            fonts-wqy-zenhei fonts-noto-cjk
+
       # push / 手动触发时跑质量检查；schedule 跳过以加速
       - name: Lint & Test
         if: github.event_name != 'schedule'
@@ -48,17 +59,10 @@ jobs:
           uv run ruff check .
           uv run python -m pytest -q
 
-      # 免费换出口 IP：Cloudflare WARP 走 Cloudflare 自己的出口（warp=on）。
-      # 注意：WARP 出口也是共享 IP，效果需实测；若稳定可用可保留，否则置为忽略。
-      - name: Setup Cloudflare WARP (free egress IP change)
-        uses: caomingjun/warp@v0.3.1
-        with:
-          mode: "warp"
-        continue-on-error: true
-
-      # 卡到中国时区并允许 WARP 生效
+      # 出口 IP 诊断（只打印，便于观察 Runner 的 IP 归属，不影响流程）
       - name: Show egress IP (diagnostic)
         run: |
+          echo "=== egress IP / trace ==="
           curl -s --max-time 15 https://www.cloudflare.com/cdn-cgi/trace || true
         continue-on-error: true
 
@@ -78,6 +82,7 @@ jobs:
           NOTIFY_TELEGRAM_BOT_TOKEN: ${{ secrets.NOTIFY_TELEGRAM_BOT_TOKEN }}
           NOTIFY_TELEGRAM_CHAT_ID: ${{ secrets.NOTIFY_TELEGRAM_CHAT_ID }}
           LOG_LEVEL: INFO
-          # 可选：住宅代理（治本），配置后优先于 WARP
+          # 可选：住宅代理（治本），配置后优先使用
           PLAYWRIGHT_PROXY: ${{ secrets.PLAYWRIGHT_PROXY }}
-        run: uv run python -m src.main
+        # xvfb-run 提供虚拟显示器兜底：即使 headless 某些 Linux 环境下异常也能启动
+        run: xvfb-run -a uv run python -m src.main
