@@ -1,4 +1,4 @@
-"""通知模块测试（AC-7：注册表分发、异常不外抛）。"""
+"""通知模块测试：注册表分发、异常不外抛。"""
 
 import pytest
 
@@ -55,7 +55,7 @@ class FakeSender:
 
 
 def test_notify_swallows_send_failure(capsys: pytest.CaptureFixture[str]) -> None:
-    """BR-5：发送异常仅 warning，不外抛。"""
+    """发送异常仅记录 warning，不外抛。"""
     notify_mod.register_sender("telegram", FakeSender(fail=True))
     notify_mod.notify(_settings(), _result())  # 不抛异常即通过
 
@@ -76,7 +76,7 @@ def test_notify_unknown_channel_skipped() -> None:
 
 
 def test_register_new_channel_without_core_changes() -> None:
-    """AC-7：新渠道 = register_sender 一行，core 不改。"""
+    """新渠道 = register_sender 一行，core 不改。"""
     fake = FakeSender()
     notify_mod.register_sender("bark", fake)
     s = _with_channel(_settings(), "bark")

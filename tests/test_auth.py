@@ -107,7 +107,7 @@ def test_cookies_injected_before_verify() -> None:
 
 
 def test_cookie_failure_falls_back_to_password() -> None:
-    """边界条件 1：Cookie 验证失败 → 降级账号密码。Cookie 链重试 3 次需 3 个 403 响应。"""
+    """Cookie 验证失败 → 降级账号密码。Cookie 链重试 3 次需 3 个 403 响应。"""
     http = FakeClient([
         ("current.json", FakeResponse(403)),  # Cookie 验证失败（重试 1）
         ("current.json", FakeResponse(403)),  # 重试 2
@@ -134,7 +134,7 @@ def test_cookie_failure_without_credentials_raises() -> None:
 
 
 def test_password_login_flow(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-2：无 Cookie 时走 CSRF → POST /session → 验证。"""
+    """无 Cookie 时走 CSRF → POST /session → 验证。"""
     # 绕过 with_retry 的真实 sleep（成功路径无重试，直接缩短延迟区间即可）
     http = FakeClient([
         ("session/csrf", FakeResponse(200, {"csrf": "tok"})),

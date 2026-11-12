@@ -1,4 +1,4 @@
-"""浏览行为（DrissionPage 版）：抓列表 → 随机抽取 → 滚动停留 → 可选低频点赞（BR-3）。"""
+"""浏览行为（DrissionPage 版）：抓列表 → 随机抽取 → 滚动停留 → 可选低频点赞。"""
 
 from __future__ import annotations
 
@@ -200,7 +200,7 @@ def visit_topic(
 
 
 def browse(page: ChromiumPage, settings: Settings) -> BrowseStats:
-    """浏览主流程：抓列表 → 逐帖访问。单帖失败跳过（BR-4）。"""
+    """浏览主流程：抓列表 → 逐帖访问。单个帖子失败则跳过，继续其余。"""
     from src.errors import RateLimitError
 
     stats = BrowseStats(total=settings.browse_count)

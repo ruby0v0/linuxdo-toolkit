@@ -137,7 +137,7 @@ def test_browse_visits_all_topics() -> None:
 
 
 def test_browse_skips_failed_topic() -> None:
-    """BR-4：单帖失败跳过，其余继续。"""
+    """单个帖子失败则跳过，其余继续。"""
     page = FakePage(topic_count=4, fail_urls={"/t/topic-2"})
     stats = browse(page, _settings(BROWSE_COUNT="4"))  # type: ignore[arg-type]
     assert stats.visited == 3
