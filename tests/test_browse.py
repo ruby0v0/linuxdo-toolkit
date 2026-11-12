@@ -1,4 +1,4 @@
-"""浏览模块测试：mock page 桩，不发真实网络请求、不启动浏览器。"""
+"""浏览模块测试：mock DrissionPage 标签页桩，不发真实网络请求、不启动浏览器。"""
 
 from typing import Any
 
@@ -9,87 +9,99 @@ from src.browse import BrowseStats, browse, fetch_topic_urls
 from src.config import Settings
 
 
-# 全模块禁用真实 sleep（滚动间隔/停留/帖子间隔），测试瞬时完成
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """禁用真实 sleep，测试瞬时完成。"""
     monkeypatch.setattr(browse_mod.time, "sleep", lambda _: None)
 
 
-class _Resp:
-    """Playwright Response 桩：仅暴露 status / headers。"""
-
-    def __init__(self, status: int = 200, headers: dict[str, str] | None = None) -> None:
-        self.status = status
-        self.headers = headers or {}
-
-
-class FakeElement:
+class FakeLink:
     def __init__(self, href: str, text: str) -> None:
         self._href = href
         self._text = text
 
-    def get_attribute(self, name: str) -> str | None:
+    def attr(self, name: str) -> str | None:
         return self._href if name == "href" else None
 
-    def inner_text(self) -> str:
+    @property
+    def text(self) -> str:
         return self._text
 
-    def query_selector(self, selector: str) -> "FakeElement | None":
-        # 行内查询标题链接：返回自身（桩不区分选择器细节）
-        return self if "title" in selector or "topic-link" in selector else None
+
+class FakeArea:
+    def __init__(self, links: list[FakeLink]) -> None:
+        self._links = links
+
+    def eles(self, selector: str) -> list[FakeLink]:
+        return self._links
 
 
 class FakePage:
-    """最小 page 桩：latest 列表返回固定元素，goto 记录访问。"""
+    """最小 ChromiumPage 桩：首页返回列表区域，可模拟限流/失败。"""
 
-    def __init__(self, topic_count: int = 3, fail_urls: set[str] | None = None) -> None:
-        self._topics = [
-            FakeElement(f"/t/topic-{i}", f"标题{i}") for i in range(topic_count)
-        ]
+    def __init__(
+        self,
+        topic_count: int = 3,
+        fail_urls: set[str] | None = None,
+        body: str = "",
+        has_area: bool = True,
+    ) -> None:
+        self._links = [FakeLink(f"/t/topic-{i}", f"标题{i}") for i in range(topic_count)]
         self.fail_urls = fail_urls or set()
         self.visited: list[str] = []
-        self.wheel_calls = 0
-        self.url = "https://linux.do/latest"
-        self._title = "LINUX DO"
-        self._body = ""
+        self._body = body
+        self._has_area = has_area
+        self.title = "LINUX DO"
+        self.url = "https://linux.do/"
+        self.html = f"<html><body>{body}</body></html>"
+        self.like_clicked = 0
 
-    def title(self) -> str:
-        return self._title
+    class _SetStub:
+        def cookies(self, *_: Any) -> None:
+            pass
 
-    def goto(self, url: str, **kwargs: Any) -> Any:
+    set = _SetStub()
+
+    def get(self, url: str, **kwargs: Any) -> None:
         if any(f in url for f in self.fail_urls):
             raise RuntimeError(f"navigation failed: {url}")
         self.visited.append(url)
-        return _Resp(status=200)
 
-    def wait_for_function(self, expression: str, **kwargs: Any) -> None:
-        pass  # 桩直接视为条件满足
+    def ele(self, selector: str, timeout: float = 0) -> Any:
+        # 列表区域
+        if "list-area" in selector:
+            return FakeArea(self._links) if self._has_area else None
+        # 点赞按钮：返回可点击对象，parent() 返回未赞容器（无已赞标记）
+        if "like" in selector:
+            class _Parent:
+                def attr(self, name: str) -> str | None:
+                    cls = "discourse-reactions-actions can-toggle-reaction"
+                    return cls if name == "class" else None
 
-    def wait_for_selector(self, selector: str, **kwargs: Any) -> None:
+            class _Btn:
+                def __init__(self, outer: "FakePage") -> None:
+                    self._outer = outer
+
+                def click(self) -> None:
+                    self._outer.like_clicked += 1
+
+                def parent(self) -> "_Parent":
+                    return _Parent()
+
+            return _Btn(self)
+        # 正文
+        if "post_1" in selector or "topic-post" in selector or "main-outlet" in selector:
+            return True
+        return None
+
+    def run_js(self, script: str, *args: Any) -> Any:
+        # 判断 webdriver / 正文 / 滚动，均返回合理值
+        if "innerText" in script:
+            return self._body
+        return None
+
+    def get_screenshot(self, **kwargs: Any) -> None:
         pass
-
-    def query_selector_all(self, selector: str) -> list[Any]:
-        if "topic-list" in selector:
-            return self._topics  # type: ignore[return-value]
-        return []
-
-    def query_selector(self, selector: str) -> None:
-        return None  # 无点赞按钮
-
-    def evaluate(self, expression: str) -> str:
-        return self._body
-
-    def content(self) -> str:
-        return f"<html><body>{self._body}</body></html>"
-
-    def screenshot(self, **kwargs: Any) -> None:
-        pass
-
-    class _FakeMouse:
-        def wheel(self, *_: Any) -> None:
-            pass
-
-    mouse = _FakeMouse()
 
 
 def _settings(**extra: str) -> Settings:
@@ -103,11 +115,17 @@ def test_fetch_topic_urls_shuffles_and_limits() -> None:
     assert all(url.startswith("https://linux.do/t/") for url, _ in topics)
 
 
-def test_fetch_empty_list(monkeypatch: pytest.MonkeyPatch) -> None:
-    """边界条件 2：列表为空 → stats.visited == 0（部分失败路径）。"""
+def test_fetch_empty_list() -> None:
+    """列表为空 → stats.visited == 0（部分失败路径）。"""
     page = FakePage(topic_count=0)
     stats = browse(page, _settings(BROWSE_COUNT="2"))  # type: ignore[arg-type]
     assert stats.visited == 0 and stats.total == 2
+
+
+def test_fetch_no_area_returns_empty() -> None:
+    """找不到列表容器 → 返回空，不抛异常。"""
+    page = FakePage(topic_count=3, has_area=False)
+    assert fetch_topic_urls(page, 2) == []  # type: ignore[arg-type]
 
 
 def test_browse_visits_all_topics() -> None:
@@ -127,10 +145,20 @@ def test_browse_skips_failed_topic() -> None:
 
 
 def test_like_disabled_by_default() -> None:
-    """AC-6：LIKE_ENABLED 默认关闭，likes_given 恒为 0。"""
+    """LIKE_ENABLED 默认关闭 → 不点赞。"""
     page = FakePage(topic_count=3)
-    stats = browse(page, _settings(BROWSE_COUNT="3", LIKE_ENABLED="true"))  # type: ignore[arg-type]
+    stats = browse(page, _settings(BROWSE_COUNT="3"))
     assert stats.likes_given == 0
+    assert page.like_clicked == 0
+
+
+def test_like_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LIKE_ENABLED=true 且概率命中 → 点赞按钮被点击。"""
+    monkeypatch.setattr(browse_mod.random, "random", lambda: 0.0)  # 必定命中点赞概率
+    page = FakePage(topic_count=3)
+    stats = browse(page, _settings(BROWSE_COUNT="2", LIKE_ENABLED="true"))
+    assert stats.likes_given >= 1
+    assert page.like_clicked >= 1
 
 
 def test_stats_defaults() -> None:
@@ -140,8 +168,7 @@ def test_stats_defaults() -> None:
     assert stats.topics == []
 
 
-def test_scroll_parameters_in_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """滚动参数区间收敛检查（防手滑把区间改出合理范围）。"""
+def test_scroll_parameters_in_bounds() -> None:
     assert browse_mod.DWELL_RANGE[0] >= 2.0
     assert browse_mod.DWELL_RANGE[1] <= 10.0
     assert browse_mod.SCROLL_STEPS_RANGE[1] <= 8
@@ -150,39 +177,26 @@ def test_scroll_parameters_in_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 限流识别与退避（新增：验证 429 / CF 挑战页被正确识别并触发长退避重试）
+# 限流识别
 # ---------------------------------------------------------------------------
-def test_rate_limited_429_raises_and_retries() -> None:
-    """429 错误页应抛 RateLimitError 并被 browse 重试，而非静默返回空列表。"""
+def test_rate_limited_page_raises_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """限流正文应抛 RateLimitError 并被 browse 重试，而非静默返回空列表。"""
     from src.errors import RateLimitError
 
-    page = FakePage(topic_count=0)
-    page._body = "Too Many Requests"
-    # 让 goto 返回 429
-    page.goto = lambda url, **kw: _Resp(status=429, headers={"retry-after": "0"})  # type: ignore[method-assign]
+    page = FakePage(topic_count=3, body="Too Many Requests")
 
-    # 缩短退避，避免测试真的睡 30~90s
-    import src.browse as b
-    orig = b.RATE_LIMIT_BACKOFF
-    b.RATE_LIMIT_BACKOFF = (0.0, 0.0)
-    try:
-        with pytest.raises(RateLimitError):
-            browse(page, _settings(BROWSE_COUNT="2"))  # type: ignore[arg-type]
-    finally:
-        b.RATE_LIMIT_BACKOFF = orig
+    monkeypatch.setattr(browse_mod, "RATE_LIMIT_BACKOFF", (0.0, 0.0))
+    with pytest.raises(RateLimitError):
+        browse(page, _settings(BROWSE_COUNT="2"))  # type: ignore[arg-type]
 
 
 def test_cloudflare_challenge_detected() -> None:
-    """正文命中 'Just a moment' 等挑战特征时也应判定为限流。"""
     from src.browse import _looks_rate_limited
 
-    resp = _Resp(status=200)
-    err = _looks_rate_limited(resp, "Just a moment... Checking your browser")
-    assert err is not None
+    assert _looks_rate_limited("Just a moment... Checking your browser") is not None
 
 
 def test_normal_page_not_flagged() -> None:
-    """正常页面不应被误判为限流。"""
     from src.browse import _looks_rate_limited
 
-    assert _looks_rate_limited(_Resp(status=200), "最新 话题 列表 LINUX DO") is None
+    assert _looks_rate_limited("最新 话题 列表 LINUX DO") is None

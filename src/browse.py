@@ -1,26 +1,29 @@
-"""浏览行为：抓取帖子列表 → 随机抽取 → 随机滚动 + 停留 → 可选低频点赞（BR-3）。"""
+"""浏览行为（DrissionPage 版）：抓列表 → 随机抽取 → 滚动停留 → 可选低频点赞（BR-3）。"""
 
 from __future__ import annotations
 
 import random
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from playwright.sync_api import Page
 
 from src.config import Settings
-from src.errors import RateLimitError
 from src.retry import with_retry
+
+if TYPE_CHECKING:
+    from DrissionPage import ChromiumPage
 
 BASE_URL = "https://linux.do"
 
 # --- 页面选择器（集中常量，应对站点改版只需改这里） ---
-SELECTOR_TOPIC_LIST = "table.topic-list tr.topic-list-item"
-SELECTOR_TOPIC_LINK = "a.title.raw-link.raw-topic-link"
-SELECTOR_TOPIC_BODY = "#post_1, .topic-post"
+LIST_AREA_ID = "#list-area"  # 首页帖子列表容器
+SELECTOR_TOPIC_LINK = "css:a.raw-topic-link"  # 列表内的帖子标题链接
+SELECTOR_TOPIC_BODY = "css:#post_1, .topic-post, #main-outlet"  # 帖子详情正文
+SELECTOR_LIKE_BUTTON = "css:.discourse-reactions-reaction-button, button.like, .like-button"
 
-# --- 行为参数（区间设计使总时长落在 2~5 分钟：6 帖 × ~(20s 滚动 + 25s 停留) ≈ 4 分钟） ---
+# --- 行为参数（区间设计使总时长落在 2~5 分钟） ---
 DWELL_RANGE = (3.0, 8.0)  # 每屏停留秒数
 SCROLL_STEPS_RANGE = (2, 6)  # 每帖滚动屏数
 SCROLL_STEP_INTERVAL = (0.8, 2.0)  # 滚动间隔秒数
@@ -29,7 +32,6 @@ LIKE_PROBABILITY = 0.3  # 点赞概率上限（LIKE_ENABLED=true 时）
 MAX_LIKES_PER_RUN = 3  # 每次运行点赞总数上限
 
 # --- 风控识别（数据中心 IP / Cloudflare 常见拦截特征） ---
-# 命中正文关键词即判定为被限流/挑战，用于让上层改用长退避重试而非秒级快速重试
 _RATE_LIMIT_KEYWORDS = (
     "too many requests",
     "rate limit",
@@ -53,129 +55,125 @@ class BrowseStats:
     topics: list[str] = field(default_factory=list)  # 已访问帖子标题（日志/通知用）
 
 
-def _human_scroll(page: Page) -> None:
+def _human_scroll(page: ChromiumPage) -> None:
     """模拟真实阅读：随机屏数、随机距离、随机间隔的滚动。"""
     steps = random.randint(*SCROLL_STEPS_RANGE)
     for _ in range(steps):
-        page.mouse.wheel(0, random.uniform(*SCROLL_DISTANCE))
+        page.run_js(f"window.scrollBy(0, {random.uniform(*SCROLL_DISTANCE):.0f});")
         time.sleep(random.uniform(*SCROLL_STEP_INTERVAL))
 
 
-def _dwell(page: Page) -> None:
+def _dwell() -> None:
     time.sleep(random.uniform(*DWELL_RANGE))
 
 
-def _retry_after_from(response: object) -> float | None:
-    """从 Playwright Response 响应头解析 Retry-After（秒），失败返回 None。"""
-    headers = getattr(response, "headers", None)
-    if not isinstance(headers, dict):
-        return None
-    raw = headers.get("retry-after") or headers.get("Retry-After")
-    if not raw:
-        return None
+def _body_text(page: ChromiumPage) -> str:
+    """取页面可见正文（用于风控关键词判断），失败退化为空串。"""
     try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None  # Retry-After 也可能是 HTTP 日期格式，此处仅处理秒数形式
-
-
-def _looks_rate_limited(response: object, body_text: str) -> RateLimitError | None:
-    """综合 HTTP 状态码与正文判断是否被限流/挑战，命中则返回异常对象。"""
-    status = getattr(response, "status", None)
-    lowered = (body_text or "").lower()
-    hit_keyword = next((kw for kw in _RATE_LIMIT_KEYWORDS if kw in lowered), None)
-    if status == 429:
-        return RateLimitError(
-            "被限流（HTTP 429，Too Many Requests）",
-            retry_after=_retry_after_from(response),
-        )
-    if hit_keyword is not None:
-        return RateLimitError(
-            f"疑似被风控/Cloudflare 挑战（正文命中 {hit_keyword!r}）",
-            retry_after=_retry_after_from(response),
-        )
-    return None
-
-
-def _body_text(page: Page) -> str:
-    try:
-        return page.evaluate("() => document.body ? document.body.innerText : ''") or ""
-    except Exception:  # noqa: BLE001 — 上下文销毁等场景，退化为空串
+        return page.run_js("return document.body ? document.body.innerText : ''") or ""
+    except Exception:  # noqa: BLE001 — 上下文异常退化为空串
         return ""
 
 
-def fetch_topic_urls(page: Page, count: int) -> list[tuple[str, str]]:
-    """从 latest 列表收集帖子 (url, title)，随机打散。
-
-    Discourse 是 SPA，页面 load 后内容由 JS 渲染。
-    用 JS 轮询等待列表元素出现（避免 networkidle 永不触发的问题）。
-
-    关键：显式检查 HTTP 状态与正文，命中限流/挑战时抛 RateLimitError，
-    让上层 with_retry 使用长退避重试，而不是把"429 错误页"误判为"空列表"。
-    """
-    response = page.goto(f"{BASE_URL}/latest", wait_until="load", timeout=60_000)
-
-    # 先按状态码 / 正文判断是否被限流，命中直接抛（交给上层长退避重试）
-    blocked = _looks_rate_limited(response, _body_text(page))
-    if blocked is not None:
-        _dump_debug(page, prefix="rate-limited")
-        raise blocked
-
-    # 轮询等待列表元素出现（最多 20s，每 0.5s 检查一次）
-    try:
-        page.wait_for_function(
-            "document.querySelectorAll('table.topic-list tr.topic-list-item').length > 0",
-            timeout=20_000,
-        )
-    except Exception:  # noqa: BLE001 — 超时/上下文销毁视为列表未就绪
-        # 超时后再判定一次：可能是慢速挑战页伪装成空白
-        blocked = _looks_rate_limited(response, _body_text(page))
-        if blocked is not None:
-            _dump_debug(page, prefix="rate-limited")
-            raise blocked from None
-        logger.warning(
-            "等待帖子列表超时：当前 URL={}，标题={}（页面已加载但无列表元素，疑似选择器失效）",
-            page.url, page.title(),
-        )
-        _dump_debug(page, prefix="empty-topic-list")
-        return []
-
-    elements = page.query_selector_all(SELECTOR_TOPIC_LIST)
-    topics: list[tuple[str, str]] = []
-    for el in elements:
-        link = el.query_selector(SELECTOR_TOPIC_LINK)
-        href = link.get_attribute("href") if link else None
-        title = (link.inner_text() if link else "").strip()
-        if href:
-            topics.append((f"{BASE_URL}{href}" if href.startswith("/") else href, title or href))
-    random.shuffle(topics)
-    return topics[:count]
+def _looks_rate_limited(body_text: str) -> str | None:
+    """正文命中限流/挑战关键词时返回命中词，否则 None。"""
+    lowered = (body_text or "").lower()
+    return next((kw for kw in _RATE_LIMIT_KEYWORDS if kw in lowered), None)
 
 
-def _dump_debug(page: Page, prefix: str) -> None:
-    """保存诊断产物（截图 + HTML 片段），用于排查页面实际状态。"""
+def _rate_limit_delay(exc: Exception, attempt: int) -> float:
+    """限流退避：取长退避区间 + 抖动，避免与其它实例同时重试。"""
+    from src.errors import RateLimitError
+
+    if isinstance(exc, RateLimitError) and exc.retry_after:
+        return exc.retry_after * random.uniform(1.0, 1.1)
+    return random.uniform(*RATE_LIMIT_BACKOFF)
+
+
+def _dump_debug(page: ChromiumPage, prefix: str) -> None:
+    """保存诊断产物（截图 + HTML），用于排查页面实际状态。"""
     try:
         screenshot = f"/tmp/{prefix}.png"
         html_path = f"/tmp/{prefix}.html"
-        page.screenshot(path=screenshot)
-        html = page.content()
+        page.get_screenshot(path=screenshot, full_page=False)
+        html = page.html
         with open(html_path, "w") as f:
             f.write(html)
         logger.warning("诊断产物：截图 {}，HTML {}（{} 字节）", screenshot, html_path, len(html))
-        # 页面正文前 200 字符（判断是否 CF 挑战页）
         body_text = _body_text(page)[:200]
         logger.warning("页面正文预览：{}", body_text.replace("\n", " ")[:200])
     except Exception as exc:  # noqa: BLE001 — 诊断失败不影响主流程
         logger.warning("保存诊断产物失败：{}", exc)
 
 
-def _maybe_like(page: Page, stats: BrowseStats) -> None:
-    """低频点赞：概率命中且未达上限时，点开帖子第一个赞按钮。"""
+def fetch_topic_urls(page: ChromiumPage, count: int) -> list[tuple[str, str]]:
+    """访问首页 → 从 #list-area 抓取帖子 (url, title)，随机打散。
+
+    采用"首页 → 列表"而非直接 /latest：首页是正常浏览入口，被 Discourse 限流程度
+    通常低于 /latest 列表接口。命中限流/挑战页则抛异常由上层长退避重试。
+    """
+    page.get(BASE_URL)
+    body = _body_text(page)
+    hit = _looks_rate_limited(body)
+    if hit is not None:
+        _dump_debug(page, prefix="rate-limited")
+        from src.errors import RateLimitError
+
+        raise RateLimitError(f"疑似被风控/Cloudflare 挑战（正文命中 {hit!r}）")
+
+    area = page.ele(LIST_AREA_ID, timeout=20)
+    if not area:
+        # 超时兜底再判一次限流，否则视为列表未就绪
+        hit = _looks_rate_limited(_body_text(page))
+        if hit is not None:
+            _dump_debug(page, prefix="rate-limited")
+            from src.errors import RateLimitError
+
+            raise RateLimitError(f"疑似被风控/Cloudflare 挑战（正文命中 {hit!r}）")
+        logger.warning("未找到帖子列表容器 {}（页面标题：{}）", LIST_AREA_ID, page.title)
+        _dump_debug(page, prefix="empty-topic-list")
+        return []
+
+    links = area.eles(SELECTOR_TOPIC_LINK)
+    topics: list[tuple[str, str]] = []
+    for a in links:
+        href = a.attr("href")
+        if not href:
+            continue
+        url = href if href.startswith("http") else f"{BASE_URL}{href}"
+        title = (a.text or "").strip() or href
+        topics.append((url, title))
+    random.shuffle(topics)
+    return topics[:count]
+
+
+# 已赞会体现在 reaction 容器（按钮父节点）的 class 上：
+#   - has-reacted / has-used-main-reaction：我点过主表情
+#   - custom-reaction-used：我用过自定义表情
+# 命中任一即视为已赞，避免误点导致"取消赞"
+_LIKED_CLASS_MARKERS = ("has-reacted", "has-used-main-reaction", "custom-reaction-used")
+
+
+def _already_liked(button: Any) -> bool:
+    """判断该帖是否已点赞（读按钮父容器的 class 标记）。"""
+    try:
+        parent = button.parent()
+        cls = (parent.attr("class") if parent else "") or ""
+    except Exception:  # noqa: BLE001 — DOM 异常时保守认为"已赞"，不点
+        return True
+    return any(marker in cls for marker in _LIKED_CLASS_MARKERS)
+
+
+def _maybe_like(page: ChromiumPage, stats: BrowseStats) -> None:
+    """低频点赞：概率命中且未达上限时，点开帖子第一个赞按钮（已赞则跳过，避免取消赞）。"""
     if stats.likes_given >= MAX_LIKES_PER_RUN or random.random() > LIKE_PROBABILITY:
         return
-    button = page.query_selector(".topic-post:first-child .like-button, button.like")
-    if button is None:
+    button = page.ele(SELECTOR_LIKE_BUTTON, timeout=3)
+    if not button:
         logger.debug("未找到点赞按钮，跳过点赞")
+        return
+    if _already_liked(button):
+        logger.debug("该帖已点赞，跳过（避免取消赞）")
         return
     try:
         button.click()
@@ -185,15 +183,15 @@ def _maybe_like(page: Page, stats: BrowseStats) -> None:
         logger.warning("点赞失败：{}", exc)
 
 
-def visit_topic(page: Page, url: str, title: str, settings: Settings, stats: BrowseStats) -> None:
+def visit_topic(
+    page: ChromiumPage, url: str, title: str, settings: Settings, stats: BrowseStats
+) -> None:
     """访问单个帖子：加载 → 滚动 → 停留 →（可选）点赞。失败抛异常由调用方跳过。"""
-    with_retry(
-        lambda: page.goto(url, wait_until="domcontentloaded", timeout=30_000),
-        what=f"打开帖子（{title[:30]}）",
-    )
-    page.wait_for_selector(SELECTOR_TOPIC_BODY, timeout=10_000)
+    with_retry(lambda: page.get(url), what=f"打开帖子（{title[:30]}）")
+    # 等待正文出现（SLA，超时不致命——文末照样继续滚动）
+    page.ele(SELECTOR_TOPIC_BODY, timeout=10)
     _human_scroll(page)
-    _dwell(page)
+    _dwell()
     if settings.like_enabled:
         _maybe_like(page, stats)
     stats.visited += 1
@@ -201,23 +199,17 @@ def visit_topic(page: Page, url: str, title: str, settings: Settings, stats: Bro
     logger.info("已浏览（{}/{}）：{}", stats.visited, stats.total, title)
 
 
-def _rate_limit_delay(exc: Exception, attempt: int) -> float:
-    """限流退避：优先遵守 Retry-After，否则取长退避区间 + 小抖动。"""
-    if isinstance(exc, RateLimitError) and exc.retry_after:
-        # 服务端建议等待，加 10% 抖动避免与其它实例同时重试
-        return exc.retry_after * random.uniform(1.0, 1.1)
-    return random.uniform(*RATE_LIMIT_BACKOFF)
-
-
-def browse(page: Page, settings: Settings) -> BrowseStats:
+def browse(page: ChromiumPage, settings: Settings) -> BrowseStats:
     """浏览主流程：抓列表 → 逐帖访问。单帖失败跳过（BR-4）。"""
+    from src.errors import RateLimitError
+
     stats = BrowseStats(total=settings.browse_count)
     logger.info("开始浏览：计划 {} 帖，点赞={}", settings.browse_count, settings.like_enabled)
 
     topics = with_retry(
         lambda: fetch_topic_urls(page, settings.browse_count),
         what="获取帖子列表",
-        exceptions=(RateLimitError,),  # 仅对限流类异常重试；返回空列表视为成功不再重试
+        exceptions=(RateLimitError,),  # 仅对限流类异常重试；空列表视为成功不再重试
         delay_fn=_rate_limit_delay,
         on_give_up=lambda exc: logger.error(
             "获取帖子列表最终失败（已重试），疑似出口 IP 被限流/风控：{}", exc
@@ -233,11 +225,9 @@ def browse(page: Page, settings: Settings) -> BrowseStats:
         except Exception as exc:  # noqa: BLE001 — 单帖失败跳过
             stats.failed += 1
             logger.warning("帖子访问失败，跳过：{}（{}）", title[:40], exc)
-        # 帖子之间的自然间隔
         time.sleep(random.uniform(1.0, 3.0))
 
     logger.info(
-        "浏览完成：成功 {} / 失败 {} / 点赞 {}",
-        stats.visited, stats.failed, stats.likes_given,
+        "浏览完成：成功 {} / 失败 {} / 点赞 {}", stats.visited, stats.failed, stats.likes_given
     )
     return stats

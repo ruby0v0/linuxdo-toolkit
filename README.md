@@ -9,7 +9,7 @@
 - 单账号、单线程、克制运行：每次浏览少量帖子（默认 6，上限 20），全程约 2~5 分钟
 - 登录优先级：Cookie（`LINUXDO_COOKIES`）→ 账号密码（自动回退）
 - 登录 HTTP 请求优先使用 [curl-cffi](https://github.com/lexiforest/curl-cffi)（Chrome TLS 指纹），不可用时自动降级 httpx
-- 浏览行为由 [Playwright](https://playwright.dev/python/)（Chromium）驱动：随机选帖、随机滚动、随机停留
+- 浏览行为由 [DrissionPage](https://github.com/g1879/DrissionPage) 接管**真实 Chrome**驱动：随机选帖、随机滚动、随机停留（真实浏览器指纹，较 Playwright 自带 Chromium 更不易被风控）
 - 默认**不点赞**；即使开启也限制概率 ≤30% 且每次运行 ≤3 次
 - 可插拔通知（内置 Telegram），运行结束推送成功/失败摘要
 - 支持本地运行与 GitHub Actions 定时运行
@@ -33,7 +33,7 @@ linuxdo-toolkit/
 │   ├── config.py                 # pydantic-settings 配置（fail-fast 校验）
 │   ├── http_client.py            # curl-cffi 优先 / httpx 降级适配器
 │   ├── auth.py                   # Cookie 解析 + 登录链 + 登录验证
-│   ├── browser.py                # Playwright 生命周期封装
+│   ├── browser.py                # DrissionPage（真 Chrome）生命周期封装
 │   ├── browse.py                 # 浏览行为（随机滚动 + 停留 + 可选点赞）
 │   ├── retry.py                  # 通用重试助手（带随机延迟）
 │   ├── notify.py                 # 可插拔通知（内置 Telegram）
@@ -53,6 +53,8 @@ linuxdo-toolkit/
 | `BROWSE_COUNT` | 否 | `6` | 浏览帖数（1~20，超出启动报错） |
 | `LIKE_ENABLED` | 否 | `false` | 是否启用点赞（开启后概率 ≤30%、每次 ≤3 次） |
 | `HEADLESS` | 否 | `true` | 无头浏览器 |
+| `CHROME_PATH` | 否 | 自动探测 | Chrome 可执行文件路径（CI 由 setup-chrome 注入；留空按平台探测） |
+| `PLAYWRIGHT_PROXY` | 否 | — | 出口代理（格式 `host:port` 或 `http://host:port`），留空不使用 |
 | `NOTIFY_ENABLED` | 否 | `false` | 是否发送通知 |
 | `NOTIFY_CHANNEL` | 否 | `telegram` | 通知渠道 |
 | `NOTIFY_TELEGRAM_BOT_TOKEN` | 条件 | — | 启用 Telegram 通知时必需 |
@@ -75,8 +77,7 @@ linuxdo-toolkit/
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 2. 安装依赖 + Chromium
-uv sync
-uv run playwright install chromium
+uv sync   # 需本机已安装 Google Chrome（DrissionPage 直接驱动系统 Chrome）
 
 # 3. 配置凭据
 cp .env.example .env
@@ -103,11 +104,17 @@ uv run python -m src.main --dry-run  # 仅登录验证，不浏览、不通知
    可选的**变量**（Settings → Variables，有默认值）：`BROWSE_ENABLED`、`BROWSE_COUNT`、`LIKE_ENABLED`、`NOTIFY_ENABLED`、`NOTIFY_CHANNEL`。
 
 3. Workflow 说明（`.github/workflows/daily.yml`）：
-   - **定时**：每天 UTC 1:23（北京时间 9:23）自动运行，避开整点；
+   - **浏览器**：用 `browser-actions/setup-chrome` 安装**真实 Chrome**，由 DrissionPage 接管（指纹更真）；
+   - **定时**：每天 3 个分散时段触发（UTC 01:17 / 07:33 / 13:41，即北京 09:17 / 15:33 / 21:41），低频且避开整点；一天多次 → 每次 runner 出口 IP 不同，任一次未被严格限流即成功；
+   - **免费换出口 IP**：内置 Cloudflare WARP 步骤（`caomingjun/warp`）尝试更换出口 IP（`continue-on-error`，失败不影响主流程）；
    - **手动**：Actions 页面选择 "Daily Visit" → Run workflow；
    - push / 手动触发时会先跑 lint + 测试，定时运行直接执行以加速。
 
-> 注意：GitHub Actions 的出口 IP 属于数据中心段，部分站点风控较严。若遇到问题，可降低频率或改为本地定时运行（如 macOS launchd / Linux crontab）。
+> 注意：GitHub Actions 免费 runner 出口 IP 属于数据中心段（Azure），linux.do 在 Cloudflare 后面、对这类 IP 限流较严（典型表现是 HTTP 429 / "Too Many Requests"）。本项目的应对：
+> 1. 真 Chrome + DrissionPage 提升指纹真实性；
+> 2. 一天多次分散触发 + 命中限流时长退避重试；
+> 3. 可选 WARP 免费换 IP；
+> 4. 若仍不稳定，可配置住宅代理 `PLAYWRIGHT_PROXY`（治本，需自备代理，非必需）。
 
 ## 扩展通知渠道
 
