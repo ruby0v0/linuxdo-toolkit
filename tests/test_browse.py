@@ -15,6 +15,14 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(browse_mod.time, "sleep", lambda _: None)
 
 
+class _Resp:
+    """Playwright Response 桩：仅暴露 status / headers。"""
+
+    def __init__(self, status: int = 200, headers: dict[str, str] | None = None) -> None:
+        self.status = status
+        self.headers = headers or {}
+
+
 class FakeElement:
     def __init__(self, href: str, text: str) -> None:
         self._href = href
@@ -43,14 +51,16 @@ class FakePage:
         self.wheel_calls = 0
         self.url = "https://linux.do/latest"
         self._title = "LINUX DO"
+        self._body = ""
 
     def title(self) -> str:
         return self._title
 
-    def goto(self, url: str, **kwargs: Any) -> None:
+    def goto(self, url: str, **kwargs: Any) -> Any:
         if any(f in url for f in self.fail_urls):
             raise RuntimeError(f"navigation failed: {url}")
         self.visited.append(url)
+        return _Resp(status=200)
 
     def wait_for_function(self, expression: str, **kwargs: Any) -> None:
         pass  # 桩直接视为条件满足
@@ -65,6 +75,15 @@ class FakePage:
 
     def query_selector(self, selector: str) -> None:
         return None  # 无点赞按钮
+
+    def evaluate(self, expression: str) -> str:
+        return self._body
+
+    def content(self) -> str:
+        return f"<html><body>{self._body}</body></html>"
+
+    def screenshot(self, **kwargs: Any) -> None:
+        pass
 
     class _FakeMouse:
         def wheel(self, *_: Any) -> None:
@@ -128,3 +147,42 @@ def test_scroll_parameters_in_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
     assert browse_mod.SCROLL_STEPS_RANGE[1] <= 8
     assert browse_mod.LIKE_PROBABILITY <= 0.3
     assert browse_mod.MAX_LIKES_PER_RUN <= 3
+
+
+# ---------------------------------------------------------------------------
+# 限流识别与退避（新增：验证 429 / CF 挑战页被正确识别并触发长退避重试）
+# ---------------------------------------------------------------------------
+def test_rate_limited_429_raises_and_retries() -> None:
+    """429 错误页应抛 RateLimitError 并被 browse 重试，而非静默返回空列表。"""
+    from src.errors import RateLimitError
+
+    page = FakePage(topic_count=0)
+    page._body = "Too Many Requests"
+    # 让 goto 返回 429
+    page.goto = lambda url, **kw: _Resp(status=429, headers={"retry-after": "0"})  # type: ignore[method-assign]
+
+    # 缩短退避，避免测试真的睡 30~90s
+    import src.browse as b
+    orig = b.RATE_LIMIT_BACKOFF
+    b.RATE_LIMIT_BACKOFF = (0.0, 0.0)
+    try:
+        with pytest.raises(RateLimitError):
+            browse(page, _settings(BROWSE_COUNT="2"))  # type: ignore[arg-type]
+    finally:
+        b.RATE_LIMIT_BACKOFF = orig
+
+
+def test_cloudflare_challenge_detected() -> None:
+    """正文命中 'Just a moment' 等挑战特征时也应判定为限流。"""
+    from src.browse import _looks_rate_limited
+
+    resp = _Resp(status=200)
+    err = _looks_rate_limited(resp, "Just a moment... Checking your browser")
+    assert err is not None
+
+
+def test_normal_page_not_flagged() -> None:
+    """正常页面不应被误判为限流。"""
+    from src.browse import _looks_rate_limited
+
+    assert _looks_rate_limited(_Resp(status=200), "最新 话题 列表 LINUX DO") is None

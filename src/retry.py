@@ -24,6 +24,7 @@ def with_retry(
     delay_range: tuple[float, float] = DELAY_RANGE,
     exceptions: tuple[type[Exception], ...] = (Exception,),
     no_retry: tuple[type[Exception], ...] = (),  # 命中即不重试（如凭据错误）
+    delay_fn: Callable[[Exception, int], float] | None = None,
     on_give_up: Callable[[Exception], None] | None = None,
 ) -> T:
     """执行 fn，失败后带随机延迟重试，最终失败抛出原异常。
@@ -35,6 +36,8 @@ def with_retry(
         delay_range: 重试延迟区间（秒），每次 uniform 取值。
         exceptions: 需要重试的异常类型。
         no_retry: 命中这些异常时立即失败，不重试（永久性错误）。
+        delay_fn: 自定义本次等待秒数的函数 ``(exc, attempt) -> seconds``。
+            给出时优先于 ``delay_range``，便于对限流类异常使用长退避。
         on_give_up: 最终失败时的回调（如发通知），不影响异常传播。
     """
     last_error: Exception | None = None
@@ -48,7 +51,10 @@ def with_retry(
             last_error = exc
             if attempt == attempts:
                 break
-            delay = random.uniform(*delay_range)
+            if delay_fn is not None:
+                delay = delay_fn(exc, attempt)
+            else:
+                delay = random.uniform(*delay_range)
             logger.warning(
                 "{} 失败（第 {}/{} 次）：{}，{:.1f}s 后重试",
                 what, attempt, attempts, exc, delay,

@@ -53,4 +53,6 @@ jobs:
           NOTIFY_TELEGRAM_BOT_TOKEN: ${{ secrets.NOTIFY_TELEGRAM_BOT_TOKEN }}
           NOTIFY_TELEGRAM_CHAT_ID: ${{ secrets.NOTIFY_TELEGRAM_CHAT_ID }}
           LOG_LEVEL: INFO
+          # 可选：配置住宅代理以缓解数据中心 IP 被 linux.do 限流（429）
+          PLAYWRIGHT_PROXY: ${{ secrets.PLAYWRIGHT_PROXY }}
         run: uv run python -m src.main

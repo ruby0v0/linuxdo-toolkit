@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     browse_count: int = Field(default=6, ge=1, le=20)
     like_enabled: bool = False
     headless: bool = True
+    # 可选出口代理（住宅代理最佳），格式 http://<user>:<pass>@host:port 或 host:port
+    # 数据中心 IP 被 linux.do 限流时，配置住宅代理可显著缓解 429
+    playwright_proxy: str | None = None
 
     # --- 通知 ---
     notify_enabled: bool = False

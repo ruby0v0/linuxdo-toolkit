@@ -27,3 +27,4 @@ test-results/
 
 # macOS
 .DS_Store
+.alma-snapshots
