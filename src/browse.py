@@ -40,9 +40,6 @@ _RATE_LIMIT_KEYWORDS = (
     "checking your browser",
 )
 
-# 命中限流时的长退避区间（秒）：429 想立刻重试基本都会再被拒，必须等
-RATE_LIMIT_BACKOFF = (30.0, 90.0)
-
 
 @dataclass
 class BrowseStats:
@@ -79,15 +76,6 @@ def _looks_rate_limited(body_text: str) -> str | None:
     """正文命中限流/挑战关键词时返回命中词，否则 None。"""
     lowered = (body_text or "").lower()
     return next((kw for kw in _RATE_LIMIT_KEYWORDS if kw in lowered), None)
-
-
-def _rate_limit_delay(exc: Exception, attempt: int) -> float:
-    """限流退避：取长退避区间 + 抖动，避免与其它实例同时重试。"""
-    from src.errors import RateLimitError
-
-    if isinstance(exc, RateLimitError) and exc.retry_after:
-        return exc.retry_after * random.uniform(1.0, 1.1)
-    return random.uniform(*RATE_LIMIT_BACKOFF)
 
 
 def _dump_debug(page: ChromiumPage, prefix: str) -> None:
@@ -206,13 +194,15 @@ def browse(page: ChromiumPage, settings: Settings) -> BrowseStats:
     stats = BrowseStats(total=settings.browse_count)
     logger.info("开始浏览：计划 {} 帖，点赞={}", settings.browse_count, settings.like_enabled)
 
+    # 快速失败：遇限流不重试（attempts=1）。多试的机会交给外部多次 cron，
+    # 单次运行在 429 时尽早退出，不占用 runner 时长、不浪费时间傻等长退避。
     topics = with_retry(
         lambda: fetch_topic_urls(page, settings.browse_count),
         what="获取帖子列表",
-        exceptions=(RateLimitError,),  # 仅对限流类异常重试；空列表视为成功不再重试
-        delay_fn=_rate_limit_delay,
+        attempts=1,
+        exceptions=(RateLimitError,),
         on_give_up=lambda exc: logger.error(
-            "获取帖子列表最终失败（已重试），疑似出口 IP 被限流/风控：{}", exc
+            "获取帖子列表失败，疑似出口 IP 被限流/风控（交由后续定时重试）：{}", exc
         ),
     )
     if not topics:
