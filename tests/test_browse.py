@@ -179,13 +179,11 @@ def test_scroll_parameters_in_bounds() -> None:
 # ---------------------------------------------------------------------------
 # 限流识别
 # ---------------------------------------------------------------------------
-def test_rate_limited_page_raises_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
-    """限流正文应抛 RateLimitError 并被 browse 重试，而非静默返回空列表。"""
+def test_rate_limited_page_fails_fast() -> None:
+    """限流正文应抛 RateLimitError 且快速失败（不重试），而非静默返回空列表。"""
     from src.errors import RateLimitError
 
     page = FakePage(topic_count=3, body="Too Many Requests")
-
-    monkeypatch.setattr(browse_mod, "RATE_LIMIT_BACKOFF", (0.0, 0.0))
     with pytest.raises(RateLimitError):
         browse(page, _settings(BROWSE_COUNT="2"))  # type: ignore[arg-type]
 

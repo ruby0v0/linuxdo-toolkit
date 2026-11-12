@@ -30,7 +30,8 @@ class AuthResult:
 
     method: str  # "cookie" | "password"
     username: str | None
-    cookies: dict[str, str]  # 已验证的会话 Cookie（用于注入浏览器）
+    cookies: dict[str, str]  # 会话 Cookie（用于注入浏览器）
+    verified: bool = True  # 是否已通过 current.json 验证；429 限流时为 False（未验证）
 
 
 def parse_cookies(raw: str) -> dict[str, str]:
@@ -94,14 +95,18 @@ def _login_with_cookies(settings: Settings, http: HttpClient) -> AuthResult:
         user = verify_login(http)
     except AuthError as exc:
         # GitHub Actions 等数据中心 IP 可能被 linux.do 限流（HTTP 429）。
-        # 429 是限流而非认证失败：Cookie 仍可能有效，跳过验证并信任 Cookie，
-        # 由后续浏览器访问最终确认，避免把限流误判为 Cookie 失效。
+        # 429 是限流而非认证失败：Cookie 未必过期，故不直接判死，而是标记为"未验证"，
+        # 携带 Cookie 交由浏览器最终确认；如实反映状态，绝不谎报"登录成功"。
         if "429" in str(exc):
-            logger.warning("Cookie 登录验证遇到 429 限流，跳过验证并信任 Cookie：{}", exc)
+            logger.warning(
+                "Cookie 未能验证（429 限流，非 Cookie 失效）：将带 Cookie 交由浏览器尝试，"
+                "若后续仍 429 则本次运行大概率失败。详情：{}", exc,
+            )
             return AuthResult(
                 method="cookie",
                 username=None,
                 cookies=http_cookies(http) or cookies,
+                verified=False,
             )
         raise
     return AuthResult(
@@ -200,7 +205,10 @@ def login(settings: Settings, http: HttpClient) -> AuthResult:
                 what="Cookie 登录",
                 exceptions=(AuthError,),
             )
-            logger.info("Cookie 登录成功，跳过账号密码流程")
+            if result.verified:
+                logger.info("Cookie 登录成功（已验证），跳过账号密码流程")
+            else:
+                logger.info("Cookie 未验证（429 限流），带 Cookie 交由浏览器尝试，不降级")
             return result
         except AuthError as exc:
             logger.warning("Cookie 登录失败：{}", exc)

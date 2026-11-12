@@ -98,6 +98,15 @@ def test_login_via_cookies_success() -> None:
     assert result.username == "u1"
 
 
+def test_cookie_429_marks_unverified_not_success() -> None:
+    """429 限流：Cookie 未验证（verified=False），username=None，method 仍 cookie，不误报成功。"""
+    http = FakeClient([("current.json", FakeResponse(429))])
+    result = login(_cookie_settings(), http)  # type: ignore[arg-type]
+    assert result.method == "cookie"
+    assert result.verified is False
+    assert result.username is None
+
+
 def test_cookies_injected_before_verify() -> None:
     """回归：Cookie 必须在验证请求前注入客户端（否则裸请求 404）。"""
     http = FakeClient([("", FakeResponse(200, {"current_user": {"id": 1, "username": "u1"}}))])

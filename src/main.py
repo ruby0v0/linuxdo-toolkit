@@ -56,7 +56,11 @@ def run(settings: Settings, dry_run: bool = False) -> RunResult:
         result.auth_method = auth_result.method
         result.username = auth_result.username
 
+        # dry-run 仅做登录验证：若 Cookie 未能通过验证（429 限流），如实报未验证，不谎报成功
         if dry_run:
+            if not auth_result.verified:
+                result.error = "登录验证未完成（429 限流，Cookie 未能通过 current.json 校验）"
+                return result
             result.success = True
             return result
 
