@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     # 可选出口代理（住宅代理最佳），格式 http://<user>:<pass>@host:port 或 host:port
     # 数据中心 IP 被 linux.do 限流时，配置住宅代理可显著缓解 429
     playwright_proxy: str | None = None
+    # Chrome 可执行文件路径（可留空，按平台自动探测；CI 中通常由 setup-chrome 提供）
+    chrome_path: str | None = None
 
     # --- 通知 ---
     notify_enabled: bool = False

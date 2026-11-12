@@ -1,4 +1,4 @@
-"""HTTP 客户端适配器：curl-cffi 优先（浏览器 TLS 指纹），异常时降级 httpx（BR-2）。"""
+"""HTTP 客户端适配器：优先 curl-cffi（浏览器 TLS 指纹），异常时降级 httpx。"""
 
 from __future__ import annotations
 

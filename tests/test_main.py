@@ -1,4 +1,4 @@
-"""main 编排测试：mock auth/browse/notify，验证退出码规则与 dry-run（BR-4）。"""
+"""main 编排测试：mock auth/browse/notify，验证退出码规则与 dry-run。"""
 
 from typing import Any
 
@@ -54,14 +54,14 @@ class _FakeSession:
 
 
 def test_run_success_browse_disabled() -> None:
-    """AC-4：BROWSE_ENABLED=false 只登录验证，成功。"""
+    """BROWSE_ENABLED=false 只登录验证，成功。"""
     result = main_mod.run(_settings(BROWSE_ENABLED="false"))
     assert result.success is True
     assert result.browse_enabled is False
 
 
 def test_run_zero_topics_partial_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """边界条件 2：登录成功但 0 帖 → 失败（退出码 1 的来源）。"""
+    """登录成功但 0 帖 → 失败（退出码 1 的来源）。"""
     monkeypatch.setattr(
         main_mod.browse, "browse", lambda page, s: BrowseStats(total=6, visited=0)
     )
@@ -84,7 +84,7 @@ def test_run_auth_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_run_dry_run_skips_browse(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Q3：dry-run 只验证登录，不进浏览器。"""
+    """dry-run 只验证登录，不进浏览器。"""
     called = {"browse": False}
 
     def fake_browse(page: Any, settings: Settings) -> BrowseStats:

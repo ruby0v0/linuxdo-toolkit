@@ -1,4 +1,4 @@
-"""通用重试助手：有限次数重试 + 随机延迟（BR-4）。"""
+"""通用重试助手：有限次数重试 + 随机延迟。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from loguru import logger
 
 T = TypeVar("T")
 
-# 重试参数（BR-4：最多 3 次，随机延迟 1.5~4.0s）
+# 重试参数（最多 3 次，随机延迟 1.5~4.0s）
 MAX_ATTEMPTS = 3
 DELAY_RANGE = (1.5, 4.0)
 

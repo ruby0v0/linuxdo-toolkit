@@ -1,4 +1,4 @@
-"""认证模块：Cookie 解析 + 登录链（Cookie → 账号密码降级）+ 登录验证（BR-1）。
+"""认证模块：Cookie 解析 + 登录链（Cookie → 账号密码降级）+ 登录验证。
 
 登录成功判定：GET /session/current.json 返回 200 且含 current_user.id。
 """
@@ -189,9 +189,9 @@ def _login_with_password(settings: Settings, http: HttpClient) -> AuthResult:
 
 
 def login(settings: Settings, http: HttpClient) -> AuthResult:
-    """登录主链（BR-1 优先级）：Cookie → 账号密码 → AuthError。
+    """登录主链（按优先级）：Cookie → 账号密码 → AuthError。
 
-    Cookie 存在但验证失败时，若提供了账号密码则自动降级重试（边界条件 1）。
+    Cookie 存在但验证失败时，若提供了账号密码则自动降级重试。
     """
     if settings.has_cookies:
         try:

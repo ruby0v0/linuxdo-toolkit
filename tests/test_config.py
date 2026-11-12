@@ -38,7 +38,7 @@ def test_username_without_password_rejected(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_browse_count_out_of_range_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-5: BROWSE_COUNT 越界（>20）时 fail-fast。"""
+    """BROWSE_COUNT 越界（>20）时 fail-fast。"""
     for env, kwargs in (
         (_base_env(BROWSE_COUNT="25"), {"browse_count": 25}),
         (_base_env(BROWSE_COUNT="0"), {"browse_count": 0}),

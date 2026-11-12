@@ -1,6 +1,6 @@
-"""通知模块：可插拔设计（AC-7）。新增渠道 = 实现 Sender 协议 + 注册表加一行。
+"""通知模块：可插拔设计。新增渠道 = 实现 Sender 协议 + 注册表加一行。
 
-发送失败仅 warning，不影响主流程退出码（BR-5）。
+发送失败仅记录 warning，不影响主流程退出码。
 """
 
 from __future__ import annotations
@@ -69,5 +69,5 @@ def notify(settings: Settings, result: RunResult) -> None:
     try:
         sender.send(settings, title, result.to_notification_body())
         logger.info("通知已发送（渠道：{}）", settings.notify_channel)
-    except Exception as exc:  # noqa: BLE001 — 通知失败不影响主流程（BR-5）
+    except Exception as exc:  # noqa: BLE001 — 通知失败不影响主流程
         logger.warning("通知发送失败（不影响主流程）：{}", exc)

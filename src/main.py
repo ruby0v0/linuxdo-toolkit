@@ -1,6 +1,6 @@
 """入口：配置 → 日志 → 登录 →（可选）浏览 → 摘要 → 通知。
 
-退出码（BR-4）：登录成功且（浏览关闭 或 浏览 ≥1 帖）→ 0；否则 1。
+退出码：登录成功且（浏览关闭 或 浏览 ≥1 帖）→ 0；否则 1。
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="仅登录验证，不浏览、不通知（Q3 决议）",
+        help="仅登录验证，不浏览、不通知",
     )
     parser.add_argument("--version", action="version", version=__version__)
     return parser.parse_args()
@@ -47,7 +47,7 @@ def run(settings: Settings, dry_run: bool = False) -> RunResult:
 
     http = create_client()
     try:
-        # 1. 认证（BR-1）
+        # 1. 认证
         try:
             auth_result = auth.login(settings, http)
         except Exception as exc:
@@ -74,7 +74,7 @@ def run(settings: Settings, dry_run: bool = False) -> RunResult:
             finally:
                 session.close()
 
-        # 3. 成功判定（BR-4）：浏览开启但 0 帖 → 部分失败
+        # 3. 成功判定：浏览开启但 0 帖 → 部分失败
         if settings.browse_enabled and result.browse_visited == 0:
             result.error = "登录成功但 0 帖浏览（列表为空或选择器失效）"
             return result
